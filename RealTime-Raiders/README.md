@@ -17,14 +17,20 @@ Counts how many people are *actively watching* SonyLIV at every minute, filterab
 Three ways to ask the same question:
 
 - **Console** — React dashboards at `<HOSTED_CONSOLE_URL>` for the overview and per-segment views, with query latency and rows-read shown on every panel so the pipeline evidence sits next to the answer.
-- **Chat** — LibreChat at `<HOSTED_LIBRECHAT_URL>` with a Grok-powered router (`liv-analyst`) that dispatches to three OpenRouter specialists (`liv-concurrency`, `liv-segment`, `liv-capacity`) via a self-hosted `mcp-clickhouse` server. Every agent run is traced to Langfuse with the exact SQL it generated.
+- **Chat** — LibreChat at `<HOSTED_LIBRECHAT_URL>` with a Grok-powered router (`liv-analyst`) that dispatches to three OpenRouter specialists (`liv-concurrency`, `liv-segment`, `liv-capacity`) via a self-hosted `mcp-clickhouse` server. Every agent run is traced to Langfuse with the exact SQL it generated.    
 - **Self-improving loop** — *INNOVATION* -  a Langfuse eval pipeline that measures agent correctness against ClickHouse ground truth, rewrites winning prompts, and publishes them live — no restart.
+
+
+##Langfuse traces :
+Self Improving agent trace- https://us.cloud.langfuse.com/project/cmsal79180n8nad0jf50zx2yr/traces/2c8a8d7f8aeb171db3529728d8602cd2?observation=610be37f06fa9fa0&timestamp=2026-08-01T20:58:57.695Z&traceId=2c8a8d7f8aeb171db3529728d8602cd2
+
+Orchestrator trace- https://us.cloud.langfuse.com/project/cmsal79180n8nad0jf50zx2yr/traces/3de65c4206a987af83ad00fd7c554a83?observation=04b2007b06c86ace
 
 ## Hosted Demo
 
-- **Console:** <HOSTED_CONSOLE_URL>
-- **LibreChat:** <HOSTED_LIBRECHAT_URL>
-- **Judge test credentials for LibreChat:** username `<JUDGE_USERNAME>` · password `<JUDGE_PASSWORD>`
+- **Console:** <[HOSTED_CONSOLE_URL](https://literate-goldfish-5vv7wq6pxrrjhpvqg-5173.app.github.dev/)>
+- **LibreChat:** <[HOSTED_LIBRECHAT_UR](https://literate-goldfish-5vv7wq6pxrrjhpvqg-3080.app.github.dev/)L>
+- **Judge test credentials for LibreChat:** username `<user@gmail.com>` · password `<user@12345>`
 
 The demo covers the SonyLIV track requirements:
 
