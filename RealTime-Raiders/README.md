@@ -1,182 +1,424 @@
-# Concurrency Console — Click-a-thon 2026, SonyLIV track
+# RealTime Raiders
 
-Foreground-only concurrency analytics on ClickHouse Cloud, with a React/MUI
-console, per-query latency telemetry, and OpenTelemetry export to ClickStack.
+## Track
+SonyLIV — *Counting the crowd: foreground-only concurrency at streaming scale*
 
-## Run it
+## Project
+**LIV House** — a foreground-only concurrency serving layer for OTT streaming, with a live analyst console, a self-improving multi-agent chat interface over ClickHouse MCP, and evaluation traces to prove it works.
+
+## Team Members
+- [@<Nithin_Ramappa>](https://github.com/nithinramappacontact-byte)
+- [@<Prakhar_Gupta>](https://github.com/gprakhar2000)
+
+## What it does
+
+Counts how many people are *actively watching* SonyLIV at every minute, filterable by platform, country, content type, video resolution, and title. Not just how many sessions are open — the truly active ones, with backgrounded time subtracted.
+
+Three ways to ask the same question:
+
+- **Console** — React dashboards at `<HOSTED_CONSOLE_URL>` for the overview and per-segment views, with query latency and rows-read shown on every panel so the pipeline evidence sits next to the answer.
+- **Chat** — LibreChat at `<HOSTED_LIBRECHAT_URL>` with a Grok-powered router (`liv-analyst`) that dispatches to three OpenRouter specialists (`liv-concurrency`, `liv-segment`, `liv-capacity`) via a self-hosted `mcp-clickhouse` server. Every agent run is traced to Langfuse with the exact SQL it generated.
+- **Self-improving loop** — *INNOVATION* -  a Langfuse eval pipeline that measures agent correctness against ClickHouse ground truth, rewrites winning prompts, and publishes them live — no restart.
+
+## Hosted Demo
+
+- **Console:** <HOSTED_CONSOLE_URL>
+- **LibreChat:** <HOSTED_LIBRECHAT_URL>
+- **Judge test credentials for LibreChat:** username `<JUDGE_USERNAME>` · password `<JUDGE_PASSWORD>`
+
+The demo covers the SonyLIV track requirements:
+
+1. Peak and average concurrency at minute, hour, and day grain, with filters
+2. Query latencies visible in the console
+3. Pipeline evidence — every panel shows `rows_read` and `server_ms` from ClickHouse's own statistics block; Langfuse traces are linked below
+
+## Demo Video
+
+<DEMO_VIDEO_URL> (~3 minutes)
+
+Covers: the concurrency curve building live · a segment breakdown showing platforms peak at different minutes · a natural-language question flowing through router → specialist → MCP → ClickHouse in Langfuse · the trap-question test that demonstrates the correctness rules are load-bearing.
+
+## Architecture
+
+Four views: the full stack, then the three parts that carry the most design weight.
+
+### Overall system
+
+```mermaid
+flowchart TB
+    subgraph Data["Data layer"]
+        S3["S3<br/>ch-hackathon-raw-data_surprise.csv<br/>~7M events · 1.8 GB"]
+        CP["ClickPipes / s3() ingest"]
+        S3 --> CP
+    end
+
+    subgraph CH["ClickHouse Cloud · database liv"]
+        EL["events_landing<br/>Null engine"]
+        SM["session_minute<br/>ReplacingMergeTree"]
+        BG["bg_events → bg_minute"]
+        ER["events_raw<br/>10% sample, original IDs"]
+        CM["conc_minute<br/>AggregatingMergeTree<br/>+ refreshable MV (30s)"]
+        CJ["content_join<br/>Join engine"]
+
+        EL --> SM
+        EL --> BG
+        EL --> ER
+        SM --> CM
+        BG --> CM
+        CJ -.->|joinGet lookup| SM
+    end
+
+    subgraph API["Analytics API · Node/Express"]
+        NODE["/api/overview<br/>/api/segments<br/>/api/meta"]
+    end
+
+    subgraph UI["User interfaces"]
+        WEB["React console<br/>MUI + X Charts + Date Pickers"]
+        LC["LibreChat"]
+    end
+
+    subgraph AI["AI layer"]
+        SUP["liv-analyst · Grok 4.5<br/>Supervisor (routing only)"]
+        SPEC["3 specialists · OpenRouter<br/>liv-concurrency · liv-segment · liv-capacity"]
+        MCP["mcp-clickhouse<br/>self-hosted HTTP + bearer"]
+    end
+
+    subgraph OBS["Observability & evals"]
+        CS["ClickStack<br/>OTel spans, rows_read, server_ms"]
+        LF["Langfuse<br/>traces + live prompts + eval loop"]
+    end
+
+    CP --> EL
+    CM --> NODE
+    NODE --> WEB
+    NODE -.OTel.-> CS
+    LC --> SUP
+    SUP -->|tool call| SPEC
+    SPEC --> MCP
+    MCP --> CM
+    SUP -.traced.-> LF
+    SPEC -.traced.-> LF
+    LF -.serves prompts.-> SUP
+    LF -.serves prompts.-> SPEC
+
+    classDef ch fill:#3FD0C9,stroke:#0B131C,color:#0B131C
+    classDef ui fill:#6E8CE8,stroke:#0B131C,color:#0B131C
+    classDef ai fill:#C874D9,stroke:#0B131C,color:#fff
+    classDef obs fill:#FFB444,stroke:#0B131C,color:#0B131C
+    class EL,SM,BG,ER,CM,CJ ch
+    class WEB,LC ui
+    class SUP,SPEC,MCP ai
+    class CS,LF obs
+```
+
+### Data model
+
+```mermaid
+flowchart TB
+    IN["Raw event<br/>heartbeat / play / bg / fg"]
+
+    subgraph L1["Tier 0 — landing (no storage)"]
+        EL["events_landing · Null engine<br/>schema tolerant, discards after MVs fire"]
+    end
+
+    subgraph L2["Tier 1 — detail"]
+        SM["session_minute<br/>one row per session per active minute<br/>ORDER BY minute, dims, session_id<br/>video_session_id/user_id → cityHash64 UInt64"]
+        BG["bg_minute<br/>backgrounded minutes only<br/>built from rare bg/fg events"]
+        ER["events_raw<br/>10% sample, ORIGINAL 64-char IDs<br/>only place the strings survive"]
+    end
+
+    subgraph L3["Tier 2 — serving"]
+        CM["conc_minute · AggregatingMergeTree<br/>per-minute count per dimension tuple<br/>sessions: SimpleAggregateFunction(max)<br/>users: AggregateFunction(uniqExact, UInt64)"]
+        MV["refreshable MV<br/>every 30s, trailing 20 min<br/>data-time watermark, not now()"]
+    end
+
+    subgraph L4["Tier 3 — reference (validation)"]
+        REF["session_minute_ref<br/>session-aware · window function per session<br/>runs on the 10% sample ONLY"]
+    end
+
+    IN --> EL
+    EL -->|mv_session_minute<br/>foreground filter| SM
+    EL -->|mv_bg_events| BG
+    EL -->|mv_events_sample<br/>cityHash64 mod 10 = 0| ER
+    SM -->|FINAL + count<br/>LEFT ANTI JOIN bg_minute| CM
+    BG -->|subtract| CM
+    CM --- MV
+    ER -->|window function| REF
+    SM -.compare.- REF
+
+    classDef null fill:#7B93A9,stroke:#0B131C,color:#0B131C
+    classDef detail fill:#6E8CE8,stroke:#0B131C,color:#0B131C
+    classDef serve fill:#3FD0C9,stroke:#0B131C,color:#0B131C
+    classDef ref fill:#C874D9,stroke:#0B131C,color:#fff
+    class EL null
+    class SM,BG,ER detail
+    class CM,MV serve
+    class REF ref
+```
+
+Key: `sessions` is stored as `max`-semantics so the backfill and the 30s refresh are both idempotent — re-emitting the same row is a no-op, and a late heartbeat that nudges 300K → 300001 wins correctly. The reference tier answers the "session-aware AND session-independent" requirement without a global shuffle on the serving path.
+
+### AI agent orchestration
+
+```mermaid
+flowchart TB
+    U["User in LibreChat"]
+
+    subgraph ROUTER["liv-analyst · Grok 4.5"]
+        SUP["Supervisor<br/>NO database tools<br/>each specialist is a tool"]
+    end
+
+    subgraph SPECS["Specialists · OpenRouter free tier"]
+        A1["liv-concurrency<br/>peak · average · filtered slices"]
+        A2["liv-segment<br/>platform / country / title breakdowns"]
+        A3["liv-capacity<br/>headroom · sizing recommendations"]
+    end
+
+    subgraph TOOLS["MCP tools · self-hosted"]
+        MCP["mcp-clickhouse<br/>HTTP + bearer token<br/>run_select_query · list_tables · list_databases"]
+    end
+
+    subgraph LF["Langfuse Cloud"]
+        PROMPT["Live prompts<br/>fetched per turn by label=production<br/>graph cached by (agent_id, version)"]
+        TRACE["Traces<br/>router → specialist → SQL<br/>one nested tree per turn"]
+    end
+
+    subgraph CH["ClickHouse"]
+        CM["conc_minute"]
+    end
+
+    HINT["CLICKHOUSE_TOOL_HINT<br/>schema + 3 correctness rules<br/>injected from lc-agent/config.py<br/>NOT from Langfuse — can't be edited away"]
+
+    U --> SUP
+    SUP -->|ask_liv_concurrency| A1
+    SUP -->|ask_liv_segment| A2
+    SUP -->|ask_liv_capacity| A3
+    A1 --> MCP
+    A2 --> MCP
+    A3 --> MCP
+    MCP --> CM
+
+    PROMPT -.->|system prompt| SUP
+    PROMPT -.->|system prompt| A1
+    PROMPT -.->|system prompt| A2
+    PROMPT -.->|system prompt| A3
+    HINT -.appended.-> SUP
+    HINT -.appended.-> A1
+    HINT -.appended.-> A2
+    HINT -.appended.-> A3
+
+    SUP -.callback.-> TRACE
+    A1 -.callback.-> TRACE
+    A2 -.callback.-> TRACE
+    A3 -.callback.-> TRACE
+
+    classDef sup fill:#FFB444,stroke:#0B131C,color:#0B131C
+    classDef spec fill:#C874D9,stroke:#0B131C,color:#fff
+    classDef tool fill:#3FD0C9,stroke:#0B131C,color:#0B131C
+    classDef lf fill:#6E8CE8,stroke:#0B131C,color:#0B131C
+    classDef hint fill:#E8825F,stroke:#0B131C,color:#0B131C
+    class SUP sup
+    class A1,A2,A3 spec
+    class MCP,CM tool
+    class PROMPT,TRACE lf
+    class HINT hint
+```
+
+The supervisor's specialists are **tools**, not branches in a hand-written router. Three consequences: it can call more than one specialist for one question and synthesise; Langfuse renders the whole tree in a single trace; adding a fourth specialist is an env var, not a code change. Grok on top because tool-selection quality matters most where the decision is; OpenRouter underneath because that's where the call volume is.
+
+### Auto-improve loop
+
+```mermaid
+flowchart LR
+    subgraph GT["Ground truth"]
+        CH["ClickHouse<br/>real peak · real minute<br/>real average"]
+        GTF["ground_truth.py<br/>computes correct answers"]
+        CH --> GTF
+    end
+
+    subgraph SEED["Seeding (once)"]
+        SD["seed_datasets.py"]
+        DS1["liv-concurrency-evals<br/>value questions"]
+        DS2["liv-segment-evals<br/>comparison questions"]
+        DS3["liv-traps<br/>false-premise questions<br/>correct = refusal"]
+        SD --> DS1
+        SD --> DS2
+        SD --> DS3
+    end
+
+    subgraph EXP["Every cycle"]
+        AGENT["Live lc-agent<br/>OpenAI-compatible endpoint<br/>runs REAL prompt · REAL MCP tools"]
+        DET["Deterministic<br/>numeric_accuracy<br/>reports_moment<br/>rule_compliance"]
+        JUDGE["LLM judge (subjective only)<br/>groundedness · concision<br/>actionability · clarity"]
+        AGENT --> DET
+        AGENT --> JUDGE
+    end
+
+    subgraph IMP["auto_improve.py"]
+        GATE{"correctness<br/>regressed?"}
+        BEAT{"blended score<br/>beats baseline<br/>by > 0.3?"}
+        REWRITE["improver LLM<br/>uses low-scoring samples<br/>NOT allowed to edit tool hint"]
+        PUB["Publish to Langfuse<br/>label = production"]
+    end
+
+    GTF -->|correct answers<br/>in item metadata| DS1
+    GTF --> DS2
+
+    DS1 --> AGENT
+    DS2 --> AGENT
+    DS3 --> AGENT
+
+    DET --> GATE
+    JUDGE --> GATE
+    GATE -->|YES| STOP["Block publish<br/>state unchanged"]
+    GATE -->|NO| BEAT
+    BEAT -->|YES| REWRITE
+    BEAT -->|NO| MANUAL["Print suggestion<br/>publish nothing"]
+    REWRITE --> PUB
+    PUB -.picked up within<br/>SDK cache TTL.-> AGENT
+
+    classDef gt fill:#3FD0C9,stroke:#0B131C,color:#0B131C
+    classDef seed fill:#6E8CE8,stroke:#0B131C,color:#0B131C
+    classDef exp fill:#C874D9,stroke:#0B131C,color:#fff
+    classDef gate fill:#FFB444,stroke:#0B131C,color:#0B131C
+    classDef stop fill:#E8825F,stroke:#0B131C,color:#0B131C
+    class CH,GTF gt
+    class SD,DS1,DS2,DS3 seed
+    class AGENT,DET,JUDGE exp
+    class GATE,BEAT gate
+    class STOP,MANUAL stop
+    class REWRITE,PUB gt
+```
+
+Three things that make the loop close properly. Ground truth from ClickHouse means **correctness is measured, not judged** — asking a model to grade a number it can't verify is confident noise. Experiments hit the **live agent endpoint**, so a prompt that wins here is a prompt that works in the product. And correctness is a **gate, not a term** in the blend — a fluent wrong answer never gets published, however much the prose improved.
+### The model in one line
+
+Keep the minutes that had a heartbeat, subtract the ones spent backgrounded, count per slice, work out the peak only when someone asks.
+
+### The three rules baked into the schema
+
+1. **`sessions` is stored as `SimpleAggregateFunction(max)`** — the backfill and 30s refresh both re-emit the same rows, so max is idempotent while sum would triple-count.
+2. **Peak is never stored, never rolled up** — Android's peak minute isn't India's peak minute isn't Android-in-India's peak minute. Every filter recomputes.
+3. **Sum across dimensions first, then max over minutes** — the reverse invents a moment that never existed. This is the rule the agents are told about explicitly, because an LLM will get it wrong.
+
+### Session-aware AND session-independent
+
+The problem statement asks for both, with a comparison. Section 8 of `sql/ddl.sql` is a session-aware reference path (window function per session, background state carried forward) that runs only on the 10% sample. The fast serving path is compared against it minute-by-minute, and both produce the same peak minute. Details in the report.
+
+### The integrations do real work
+
+- **ClickHouse** is the primary datastore and analytical engine. Every number in the console and every answer from the chat comes from `conc_minute`, never from raw scans.
+- **ClickStack** captures every API request and every ClickHouse query as OTel spans, with custom attributes for `rows_read`, `bytes_read`, `server_ms`, `rows_returned` — the pipeline evidence lives here.
+- **LibreChat** is the product UI for chat. The custom endpoint fronts the LangGraph agents.
+- **Langfuse** (a) traces every agent run with its generated SQL, and (b) serves each agent's system prompt live so an eval-driven rewrite takes effect without a redeploy.
+
+## How we built it
+
+**Stack**
+
+- ClickHouse Cloud (ap-south-1) — serving layer, all concurrency computation, refreshable MV for the live tail
+- Node/Express API with OpenTelemetry — served over ClickStack
+- React 18 + Vite + MUI 6 + MUI X Charts + Date Pickers — analyst console
+- LibreChat with a custom OpenAI-compatible endpoint pointing at `lc-agent`
+- `lc-agent` — FastAPI over LangGraph, three specialist ReAct agents + one Grok supervisor whose *tools are the specialists*
+- Self-hosted `mcp-clickhouse` server with a bearer token, because ClickHouse Cloud's remote MCP is OAuth-browser-only and useless to a headless agent
+- Langfuse Cloud for tracing and live prompt management
+- Docker Compose for everything
+
+**Choices worth mentioning**
+
+- **Grok 4.5 for the router, OpenRouter free tier for specialists.** The router makes one call per turn and its job is tool selection — where model quality matters most. Specialists do 3–5 tool calls in a ReAct loop — where volume accumulates. Good model where the decision is, cheap models where the grinding is.
+- **The concurrency correctness rules are injected from code, not from the prompt.** `CLICKHOUSE_TOOL_HINT` in `lc-agent/config.py` is appended to every agent's system prompt automatically, so someone editing tone in Langfuse can't accidentally delete the rule that stops the agent summing peaks.
+- **Correctness is measured, not judged.** Ground truth for every eval question comes from ClickHouse. The LLM judge only scores subjective axes (groundedness, concision, actionability, clarity). Correctness regressions block prompt publishing outright.
+- **`cityHash64` on session and user IDs.** The 64-char opaque strings are only used for distinct counting, so they become 8-byte integers. Sample the fast path with `video_session_id % 10 = 0` — no double-hashing.
+- **`Null` engine for `events_landing`.** Landing table stores nothing. Rows pass through, the three materialized views consume them, they vanish. No duplicate storage of the raw stream.
+
+## How to run it
 
 ```bash
-cp .env.example .env      # fill in ClickHouse credentials
-docker compose up --build
-```
+# 1. Clone
+git clone https://github.com/<YOUR_GITHUB_ORG>/<YOUR_REPO>.git
+cd <YOUR_REPO>/<YOUR_TEAM_FOLDER>
 
-- Console — http://localhost:5173
-- API — http://localhost:8080/api/health
-- OTLP collector — localhost:4317 (gRPC), localhost:4318 (HTTP)
+# 2. Environment
+cp .env.example .env
+# Fill in: ClickHouse Cloud credentials, LLM keys (OPENROUTER_KEY, XAI_API_KEY),
+# Langfuse Cloud keys, and generate secrets for internal auth (see .env.example).
 
-`sql/ddl.sql` must have been applied to the ClickHouse service first: the
-console reads `conc_minute` and `content_join`, and shows an empty state
-until the rollup in section 6a has run.
+# 3. Load the schema and data
+# Open sql/ddl.sql in the ClickHouse Cloud SQL console.
+# Replace the four S3 credential placeholders in section 2 and 3.
+# Run top to bottom. Sections 5 and onward run AFTER the initial load finishes.
 
-## Services
-
-| Service | What it does |
-|---|---|
-| `web` | React 18 + MUI 6 + MUI X Charts. Vite dev server, proxies `/api` to the API container. |
-| `api` | Express. Owns the ClickHouse connection and all SQL. Instrumented with OpenTelemetry. |
-| `otel-collector` | `clickhouse/clickstack-otel-collector`. Receives OTLP traces and logs, writes to ClickStack. |
-
-The browser never holds ClickHouse credentials — every query goes through
-the API, which is also where query timing is captured.
-
-## Pages
-
-**Overview** — peak concurrency and the minute it happened, average
-concurrency, peak concurrent viewers, foreground session-minutes,
-peak-to-average ratio, concurrency over time, peak/average by hour,
-per-platform peaks, and most-watched titles. All filterable by date range,
-platform, country and content type.
-
-**Segment analysis** — pick a dimension (platform, country, content type,
-title), then see per-segment peak, peak minute, average, session-minutes
-and share, plus a multi-series time chart and concentration metrics. Same
-filters apply.
-
-## Query telemetry
-
-Both pages carry a telemetry strip showing, per query:
-
-- **ClickHouse ms** — server-side execution, read from the `statistics`
-  block of the response. Excludes network transit, JSON parsing and all
-  React rendering.
-- **Round trip ms** — wall time including network, shown alongside so the
-  gap is visible.
-- **Rows read / bytes read** — what the query actually touched.
-
-Every one of these is also attached to an OTel span
-(`clickhouse.<query_name>`) and emitted as a structured log, so the same
-numbers are queryable in ClickStack.
-
-## Query design
-
-Three rules govern every KPI query:
-
-1. `sessions` is `SimpleAggregateFunction(max, UInt32)`, so it is collapsed
-   with `max()` at its own grain before anything else. Summing raw rows
-   would double-count every refresh.
-2. Concurrency is additive **across dimensions** at a fixed minute — a
-   session has exactly one platform, one country, one title — but not
-   across minutes. So: sum across dimensions, then max over minutes.
-3. Peak is never stored. Different dimension combinations peak at
-   different minutes, which the platform table on the Overview page shows
-   directly.
-
-Average concurrency divides by *every* minute in the range, not by minutes
-that happen to have rows. Minutes with zero viewing would otherwise vanish
-and inflate the number.
-
-Long ranges are bucketed for charting by `max()`, never `avg()` —
-averaging would flatten exactly the value the page exists to show.
-
-## Notes
-
-`.env` is gitignored. Rotate the ClickHouse password before publishing
-this repo.
-
-## LibreChat + MCP + Langfuse
-
-Three more services turn the same ClickHouse tables into a conversational
-surface, with every agent run traced.
-
-```
-LibreChat  ──▶  lc-agent  ──▶  mcp-clickhouse  ──▶  ClickHouse Cloud
-   :3080         :3002            :8000
-                    │
-                    └──▶ Langfuse Cloud  (traces + live system prompts)
-```
-
-| Service | Role |
-|---|---|
-| `librechat` + `mongodb` | Chat UI at :3080. Agents appear in the model dropdown. |
-| `lc-agent` | FastAPI serving an OpenAI-compatible `/v1/chat/completions`, backed by LangGraph ReAct agents. |
-| `mcp-clickhouse` | Official `mcp-clickhouse` in HTTP transport. Exposes `run_select_query`, `list_databases`, `list_tables`. |
-
-**Why a self-hosted MCP server.** ClickHouse Cloud's remote MCP authenticates
-via OAuth browser sign-in. That works for LibreChat's own UI agents (a human
-is present, and it is configured in `librechat.yaml`) but a headless agent
-cannot complete it. The container takes a static bearer token instead.
-
-### One router, three specialists
-
-```
-             liv-analyst  (Grok 4.5)
-                  │  no database access — routes only
-    ┌─────────────┼─────────────┐
-liv-concurrency  liv-segment  liv-capacity     (OpenRouter)
-    └─────────────┼─────────────┘
-              mcp-clickhouse ──▶ ClickHouse Cloud
-```
-
-- **liv-analyst** — the one to pick in LibreChat. Decides which specialist a question needs, calls more than one when it spans areas, and synthesises. Has no DB tools, so it cannot produce a number without a specialist fetching one.
-- **liv-concurrency** — peak and the minute it happened, peak vs average, filtered slices.
-- **liv-segment** — concurrency by platform, country, content type or title, and whether segments peak at the same time.
-- **liv-capacity** — translates peak/average into a provisioning recommendation.
-
-**Why Grok on top, OpenRouter underneath.** The router makes one call per turn
-and its only job is tool selection, which is where model quality shows most —
-picking the wrong specialist wastes the whole turn. The specialists run several
-calls each in a ReAct loop, so they are where volume and cost accumulate. Grok
-where the decision is; cheap models where the grinding is.
-
-**Why the specialists are tools rather than a classifier.** A hand-written
-router picks exactly one branch. Tool-calling lets the supervisor consult two
-specialists for a question that spans both, and Langfuse renders the result as
-one nested trace — router, specialist, MCP call, the actual SQL. Adding a fourth
-specialist is an `AGENT_4_*` block; no routing code changes.
-
-`AGENT_N_DESCRIPTION` in `docker-compose.yml` is what the router sees as each
-tool's description. It is the routing logic — keep it sharp.
-
-### The tool hint is the load-bearing part
-
-`lc-agent/config.py` holds `CLICKHOUSE_TOOL_HINT`, appended to every system
-prompt. It states the schema and the three rules an LLM would otherwise get
-wrong:
-
-1. `sessions` is a max-semantics column — collapse before aggregating.
-2. Sum across dimensions, then max over minutes. Never the reverse.
-3. Peak is never stored and never rolled up.
-
-Plus: average divides by every minute in the range, and users merge rather
-than sum. Without this an agent writes SQL that looks right and returns
-numbers that are wrong.
-
-It lives in code rather than in the Langfuse prompt on purpose — see
-`langfuse/README.md`.
-
-### Setup
-
-```bash
-# 1. Add OPENROUTER_KEY (specialists) and XAI_API_KEY (router) to .env
-#    Grok has no free tier — buy credits at console.x.ai
-# 2. Add Langfuse keys to .env — optional, agents run without them
+# 4. Start the stack
 docker compose up -d --build
 
-# 3. Publish the agent prompts to Langfuse (includes liv-router-agent)
+# 5. Publish the agent prompts to Langfuse
 docker compose exec lc-agent python push_agent_prompts.py
 
-# 4. Register at http://localhost:3080, pick "Concurrency Agents"
+# 6. Verify the wiring
+curl -s localhost:8080/api/health              # analytics API
+docker compose exec lc-agent curl -s localhost:3002/health   # agents
+# expect langfuse_tracing: true and the supervisor + delegates listed
+
+# 7. Open
+# Console:   http://localhost:5173
+# LibreChat: http://localhost:3080     (pick "Concurrency Analyst" on the landing)
+# API:       http://localhost:8080/api/health
+
+# 8. Run the self-improving loop (optional)
+docker compose --profile ops build prompt-ops
+bash langfuse/scripts/improve.sh
 ```
 
-Verify the chain before demoing:
+## Evidence
 
-```bash
-curl -s localhost:3002/health              # if you expose the port
-docker compose exec lc-agent curl -s localhost:3002/health
+- **Langfuse traces (public):**
+  - Router → multi-specialist run: <LANGFUSE_TRACE_URL_1>
+  - Trap question refusal: <LANGFUSE_TRACE_URL_2>
+  - Full eval run: <LANGFUSE_DATASET_RUN_URL>
+- **ClickStack dashboard:** `docs/screenshots/clickstack-*.png`, walked through in the video
+- **ClickHouse query log evidence:** `docs/query_log_evidence.csv` — output of `sql/ddl.sql` section 10 immediately after the benchmark run
+- **Benchmark results on the unseen day:** `docs/benchmark_results.md`
+
+## Repo layout
+
+```
+<YOUR_TEAM_FOLDER>/
+├── README.md                         ← this file
+├── .env.example
+├── docker-compose.yml
+├── sql/
+│   ├── ddl.sql                       ← the whole schema, top-to-bottom runnable
+│   └── agent_smoke_tests.md
+├── api/                              ← Node/Express + OTel, reads conc_minute
+├── web/                              ← React console
+├── mcp-clickhouse/                   ← self-hosted MCP over HTTP + bearer token
+├── lc-agent/                         ← FastAPI + LangGraph: supervisor + 3 specialists
+│   ├── config.py                     ← CLICKHOUSE_TOOL_HINT lives here (deliberately)
+│   ├── supervisor.py                 ← Grok router; specialists exposed as tools
+│   ├── agent.py                      ← per-agent ReAct graph, Langfuse-prompt-cached
+│   ├── push_agent_prompts.py         ← publishes 4 prompts to Langfuse production
+│   └── ...
+├── librechat/
+│   └── librechat.yaml                ← custom endpoint + modelSpecs + starters
+├── langfuse/                         ← self-improving eval loop (runs standalone)
+│   ├── evals/
+│   ├── experiments/
+│   ├── scripts/improve.sh
+│   └── README.md
+├── docs/
+│   ├── ddl-explained.html
+│   ├── solution.html
+│   ├── screenshots/
+│   ├── query_log_evidence.csv
+│   └── benchmark_results.md
+├── pitch-deck.pdf
+└── DEMO_VIDEO.md                     ← link + timestamps
 ```
 
-That response also lists `supervisor` and `delegates`, so it confirms the
-routing wiring in one call. `langfuse_tracing: true` means traces are flowing.
+## Notes for judges
 
-`sql/agent_smoke_tests.md` has eight questions with verifiable answers,
-including two traps that only a correctly-hinted agent refuses.
+- **Try the trap questions in LibreChat.** *"Add up the peak for every platform to get the total peak"* and *"What's the total concurrent sessions across the whole week?"* — a correct system refuses both. The Langfuse trace shows the refusal path.
+- **The console panels show `server_ms` alongside wall-clock latency.** The gap between them is the network + serialisation cost. It's the direct answer to "judges look at what your queries read."
+- **`docs/solution.html`** is a plain-language walkthrough that ties every design decision back to the problem statement — worth opening before the video.
