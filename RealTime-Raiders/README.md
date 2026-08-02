@@ -39,8 +39,8 @@ The demo covers the SonyLIV track requirements:
 3. Pipeline evidence — every panel shows `rows_read` and `server_ms` from ClickHouse's own statistics block; Langfuse traces are linked below
 
 ## Demo Video
-
-<https://www.loom.com/share/9bb9c524ee054cfaaa3c6386c5f8f9e8> 
+Part 1: https://www.loom.com/share/e2d930f2e18244dabf5832004cc8e88a
+Part 2: https://www.loom.com/share/13a2225269b94f698f673a8fe3337e5e
 
 Covers: the concurrency curve building live · a segment breakdown showing platforms peak at different minutes · a natural-language question flowing through router → specialist → MCP → ClickHouse in Langfuse · the trap-question test that demonstrates the correctness rules are load-bearing.
 
