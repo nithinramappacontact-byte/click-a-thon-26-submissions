@@ -40,7 +40,7 @@ The demo covers the SonyLIV track requirements:
 
 ## Demo Video
 
-<[DEMO_VIDEO_URL](https://www.loom.com/share/5adab14ac8a04a41a0dd978a96a76ac5)> 
+<https://www.loom.com/share/9bb9c524ee054cfaaa3c6386c5f8f9e8> 
 
 Covers: the concurrency curve building live · a segment breakdown showing platforms peak at different minutes · a natural-language question flowing through router → specialist → MCP → ClickHouse in Langfuse · the trap-question test that demonstrates the correctness rules are load-bearing.
 
