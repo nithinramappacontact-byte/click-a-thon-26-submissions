@@ -3,6 +3,8 @@
 ## Track
 SonyLIV — *Counting the crowd: foreground-only concurrency at streaming scale*
 
+Slides : https://drive.google.com/file/d/1DKuFJZF_JOctTfivjqj4JPGu6H14nN2N/view?usp=sharing
+
 ## Project
 **LIV House** — a foreground-only concurrency serving layer for OTT streaming, with a live analyst console, a self-improving multi-agent chat interface over ClickHouse MCP, and evaluation traces to prove it works.
 
